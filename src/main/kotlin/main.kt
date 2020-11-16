@@ -1,5 +1,4 @@
-import kotlin.experimental.and
-
+@ExperimentalStdlibApi
 @ExperimentalUnsignedTypes
 fun main(args: Array<String>) {
     // Set up render system and register input callbacks
@@ -14,12 +13,13 @@ fun main(args: Array<String>) {
         chip8.emulateCycle()
 
         if (chip8.drawFlag) {
-            drawGraphics()
+//            drawGraphics()
+            chip8.debugRender()
+            chip8.drawFlag = false
         }
-        chip8.setKeys()
+//        chip8.setKeys()
 
-        // TODO: should run 60 times per second
-        Thread.sleep(1000)
+        Thread.sleep(1000 / 60)
     }
 
 

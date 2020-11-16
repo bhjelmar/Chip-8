@@ -2,6 +2,7 @@ import java.io.File
 import java.lang.Integer.toHexString
 
 @ExperimentalUnsignedTypes
+@ExperimentalStdlibApi
 class Chip8 {
     private val applicationOffset = 512
 
@@ -105,9 +106,37 @@ class Chip8 {
                 .forEachIndexed { i, byte -> memory[applicationOffset + i] = byte.toInt() }
     }
 
+    fun debugRender() {
+        print("--------------------------------------")
+        for (x in 0 until screenWidth) {
+            for (y in 0 until screenHeight) {
+                if (gfx[(y * screenWidth) + x] == true) {
+                    print("O")
+                } else {
+                    print(" ")
+                }
+            }
+            println()
+        }
+        print("--------------------------------------")
+    }
+
     fun emulateCycle() {
         // fetch opcode
         opcode = (memory[pc] shl 8) or (memory[pc + 1])
+
+        // it's not 1978, let's make this a bit more readable at the cost of cpu cycles
+        val nnn = opcode and 0x0FFF
+        val nn = opcode and 0x00FF
+        val n = opcode and 0x000F
+
+        val x = opcode and 0x0F00 shr 8
+        val vx = V[x]
+
+        val y = opcode and 0x00F0 shr 4
+        val vy = V[y]
+
+        println(pc)
 
         // process opcode
         when (opcode and 0xF000) {
@@ -118,18 +147,53 @@ class Chip8 {
                     else -> unknownOpcode()
                 }
             }
-            0x1000 -> jumpToAddress(opcode and 0x0FFF) // 0x1NNN
-            0x2000 -> callSubroutine(opcode and 0x0FFF) // 0x2NNN
-            0x3000 -> ifEqual(opcode and 0x0F00 shr 8, opcode and 0x00FF) // 0x3XNN
-            0x4000 -> ifNotEqual(opcode and 0x0F00 shr 8, opcode and 0x00FF) // 0x4XNN
-            0x5000 -> ifEqual(opcode and 0x0F00 shr 8, opcode and 0x00F0 shr 4) // 0x5XY0
-            0x6000 -> setRegister(opcode and 0x0F00 shr 8, opcode and 0x00FF) // 0x6XNN
-            0x7000 -> addToRegister(opcode and 0x0F00 shr 8, opcode and 0x00FF) // 0x7XNN
-            0xA000 -> {
-                I = opcode and 0x0FFF
-                pc += 2
+            0x1000 -> jumpToAddress(nnn)   // 0x1NNN
+            0x2000 -> callSubroutine(nnn)  // 0x2NNN
+            0x3000 -> ifEqual(vx, nn)      // 0x3XNN
+            0x4000 -> ifNotEqual(vx, nn)   // 0x4XNN
+            0x5000 -> ifEqual(vx, vy)      // 0x5XY0
+            0x6000 -> setRegister(x, nn)   // 0x6XNN
+            0x7000 -> addToRegister(x, nn) // 0x7XNN
+            0x8000 -> {
+                when (opcode and 0x000F) {
+                    0x0000 -> setRegister(x, vy)           // 0x8XY0
+                    0x0001 -> setRegister(x, vx or vy)  // 0x8XY1
+                    0x0002 -> setRegister(x, vx and vy) // 0x8XY2
+                    0x0003 -> setRegister(x, vx xor vy) // 0x8XY3
+                    0x0004 -> add(x, vx, vy)               // 0x8XY4
+                    0x0005 -> subtract(x, vx, vy)          // 0x8XY5
+                    0x0006 -> shiftRight(x, vx)            // 0x8XY6
+                    0x0007 -> subtract(x, vy, vx)          // 0x8XY7 // TODO: revisit this, may be wrong...
+                    0x000E -> shiftLeft(x, vx)             // 0x8XYE
+                    else -> unknownOpcode()
+                }
             }
-            0xD000 -> draw(opcode and 0x0F00, opcode and 0x00F0, opcode and 0x000F) // 0xDXYN
+            0x9000 -> ifNotEqual(vx, vy)               // 0x9XY0
+            0xA000 -> setIndex(nnn)                    // 0xANNN
+            0xB000 -> jumpToAddress(V[0] + nnn) // 0xANNN
+            0xC000 -> rand(x, nn)                      // 0xANNN
+            0xD000 -> draw(vx, vy, n)                  // 0xDXYN
+            0xE000 -> {
+                when (opcode and 0x00FF) {
+                    0x009E -> unimplemented()
+                    0x00A1 -> unimplemented()
+                    else -> unknownOpcode()
+                }
+            }
+            0xF00 -> {
+                when (opcode and 0x00FF) {
+                    0x0007 -> unimplemented()
+                    0x000A -> unimplemented()
+                    0x0015 -> unimplemented()
+                    0x0018 -> unimplemented()
+                    0x001E -> unimplemented()
+                    0x0029 -> unimplemented()
+                    0x0033 -> unimplemented()
+                    0x0055 -> unimplemented()
+                    0x0065 -> unimplemented()
+                    else -> unknownOpcode()
+                }
+            }
             else -> unknownOpcode()
         }
 
@@ -145,28 +209,75 @@ class Chip8 {
         }
     }
 
-    private fun addToRegister(regIdx: Int, a: Int) {
-        V[regIdx] += a
+    // Sets VX to the result of a bitwise and operation on a random number (Typically: 0 to 255) and NN.
+    private fun rand(regIdx: Int, x: Int) {
+        val randNum = (0 until 255).random() and x
+        setRegister(regIdx, randNum)
+    }
+
+    private fun setIndex(x: Int) {
+        I = x
         pc += 2
     }
 
-    private fun setRegister(regIdx: Int, a: Int) {
-        V[regIdx] = a
+    private fun shiftLeft(regIdx: Int, x: Int) {
+        V[0xF] = x.takeHighestOneBit()
+        setRegister(regIdx, x shl 1)
+    }
+
+    private fun shiftRight(regIdx: Int, x: Int) {
+        V[0xF] = x.takeLowestOneBit()
+        setRegister(regIdx, x shr 1)
+    }
+
+    private fun subtract(regIdx: Int, x: Int, y: Int) {
+        V[0xF] = if (y > x) 0 else 1
+        setRegister(regIdx, x - y)
+
+    }
+
+    private fun add(regIdx: Int, x: Int, y: Int) {
+        V[0xF] = if (y > x) 1 else 0
+        setRegister(regIdx, x + y)
+    }
+
+    private fun addToRegister(regIdx: Int, x: Int) {
+        V[regIdx] += x
         pc += 2
     }
 
-    private fun ifNotEqual(a: Int, b: Int) {
-        // skip next instruction if a == b
-        pc += if (a != b) 4 else 2
+    private fun setRegister(regIdx: Int, x: Int) {
+        V[regIdx] = x
+        pc += 2
     }
 
-    private fun ifEqual(a: Int, b: Int) {
-        // skip next instruction if a == b
-        pc += if (a == b) 4 else 2
+    private fun ifNotEqual(x: Int, y: Int) {
+        // skip next instruction if x == y
+        pc += if (x != y) 4 else 2
     }
 
-    private fun draw(vx: Int, vy: Int, n: Int) {
+    private fun ifEqual(x: Int, y: Int) {
+        // skip next instruction if x == y
+        pc += if (x == y) 4 else 2
+    }
 
+    private fun draw(vx: Int, vy: Int, height: Int) {
+        V[0xF] = 0
+
+        for (yline in 0..height) {
+            var pixel = memory[I + yline]
+            for (xline in 0..8) {
+                if (pixel and (0x80 shr xline) != 0) {
+                    if (gfx[(vx + xline + ((vy + yline) * 64))]) {
+                        V[0xF] = 1
+                    }
+                    gfx[vx + xline + ((vy + yline) * 64)] = true
+                }
+            }
+        }
+
+        drawFlag = true
+        pc += 2
     }
 
     private fun callSubroutine(address: Int) {
@@ -187,7 +298,7 @@ class Chip8 {
     }
 
     private fun dispClear() {
-        for (i in gfx.indices) gfx[i] = true
+        for (i in gfx.indices) gfx[i] = false
         drawFlag = true
         pc += 2
     }
@@ -198,5 +309,9 @@ class Chip8 {
 
     private fun unknownOpcode() {
         println("Unknown opcode: ${toHexString(opcode).toUpperCase()}")
+    }
+
+    private fun unimplemented() {
+        println("Unimplemented opcode: ${toHexString(opcode).toUpperCase()}")
     }
 }
